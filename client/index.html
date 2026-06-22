@@ -1,0 +1,529 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>chatdev // local test console</title>
+<style>
+  :root {
+    --bg: #faf9f6;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --muted: #847f74;
+    --line: #e4e0d6;
+    --accent: #b5532c;
+    --accent-soft: #f1e3da;
+    --ok: #3d6b4f;
+    --ok-soft: #e2ecdf;
+    --mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+    --sans: "Inter", -apple-system, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ---------- sidebar ---------- */
+  .sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 28px 22px;
+    display: flex;
+    flex-direction: column;
+  }
+  .brand {
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .brand span { color: var(--accent); }
+  .brand-note {
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+    margin-bottom: 28px;
+  }
+
+  .api-line {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-bottom: 24px;
+  }
+  .api-line label { display: block; margin-bottom: 4px; }
+  .api-line input {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: var(--ink);
+  }
+  .api-line input:focus { outline: none; border-color: var(--accent); }
+
+  .who-box {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 24px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .who-box.signed-in { border-color: #c4d8c8; background: var(--ok-soft); }
+  .who-label { color: var(--muted); margin-bottom: 3px; }
+  .who-name { font-weight: 600; }
+  .who-box.signed-in .who-name { color: var(--ok); }
+
+  .auth-block { margin-bottom: 18px; }
+  .auth-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .auth-tabs button {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    padding: 6px 0;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .auth-tabs button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  .auth-form { display: none; flex-direction: column; gap: 7px; }
+  .auth-form.active { display: flex; }
+  .auth-form input {
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  .auth-form input:focus { outline: none; border-color: var(--accent); }
+  .auth-form button.submit {
+    margin-top: 2px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 0;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .auth-form button.submit:hover { background: var(--accent); }
+
+  pre.out {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    background: var(--bg);
+    border-left: 2px solid var(--line);
+    padding: 6px 8px;
+    margin-top: 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    display: none;
+    max-height: 90px;
+    overflow-y: auto;
+  }
+  pre.out.show { display: block; }
+  pre.out.err { border-left-color: var(--accent); color: var(--accent); }
+
+  .logout-link {
+    margin-top: auto;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 0;
+    text-align: left;
+  }
+  .logout-link:hover { color: var(--accent); }
+
+  /* ---------- main ---------- */
+  .main { padding: 28px 36px; }
+  .main-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 12px;
+    margin-bottom: 28px;
+  }
+  .main-head h1 { font-size: 16px; margin: 0; font-family: var(--mono); }
+  .main-head .clock { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+
+  .grid-cols {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 28px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 24px;
+  }
+  .panel h2 {
+    font-size: 13.5px;
+    margin: 0 0 3px;
+    font-weight: 600;
+  }
+  .panel .hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+
+  .search-row { display: flex; gap: 8px; margin-bottom: 4px; }
+  .search-row input {
+    flex: 1;
+    font-size: 13.5px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  .search-row input:focus { outline: none; border-color: var(--accent); }
+  .search-row button, .refresh-btn {
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: #fff;
+    cursor: pointer;
+  }
+  .search-row button:hover, .refresh-btn:hover { background: var(--accent); border-color: var(--accent); }
+  .refresh-btn { background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 5px 12px; }
+  .refresh-btn:hover { color: var(--accent); border-color: var(--accent); background: transparent; }
+
+  ul.list { list-style: none; margin: 12px 0 0; padding: 0; }
+  ul.list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13.5px;
+  }
+  ul.list li:last-child { border-bottom: none; }
+  .empty-row { color: var(--muted); font-size: 12.5px; font-style: italic; padding: 6px 0; }
+
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--line); }
+
+  .pill-btn {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: transparent;
+    cursor: pointer;
+  }
+  .pill-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pill-btn.reject:hover { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .btnset { display: flex; gap: 6px; }
+
+  .panel-head-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+
+  footer.note {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { border-right: none; border-bottom: 1px solid var(--line); }
+    .grid-cols { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- SIDEBAR: identity + auth -->
+  <aside class="sidebar">
+    <div class="brand">chatdev <span>//</span></div>
+    <div class="brand-note">local test console, not the real frontend</div>
+
+    <div class="api-line">
+      <label for="apiBase">server</label>
+      <input id="apiBase" type="text" value="http://localhost:5000">
+    </div>
+
+    <div class="who-box" id="whoBox">
+      <div class="who-label">status</div>
+      <div class="who-name" id="whoName">signed out</div>
+    </div>
+
+    <div class="auth-block">
+      <div class="auth-tabs">
+        <button id="tabLogin" class="active" onclick="switchTab('login')">log in</button>
+        <button id="tabSignup" onclick="switchTab('signup')">sign up</button>
+      </div>
+
+      <div class="auth-form active" id="formLogin">
+        <input id="liUsername" type="text" placeholder="username">
+        <input id="liPassword" type="password" placeholder="password">
+        <button class="submit" onclick="login()">log in</button>
+        <pre class="out" id="liOut"></pre>
+      </div>
+
+      <div class="auth-form" id="formSignup">
+        <input id="suUsername" type="text" placeholder="username">
+        <input id="suEmail" type="email" placeholder="email">
+        <input id="suPassword" type="password" placeholder="password">
+        <button class="submit" onclick="signup()">create account</button>
+        <pre class="out" id="suOut"></pre>
+      </div>
+    </div>
+
+    <button class="logout-link" onclick="logout()">sign out →</button>
+  </aside>
+
+  <!-- MAIN: the actual features -->
+  <main class="main">
+    <div class="main-head">
+      <h1>level 1 — auth, search, friends</h1>
+      <div class="clock" id="clock"></div>
+    </div>
+
+    <div class="grid-cols">
+
+      <div class="col">
+        <div class="panel">
+          <h2>find someone</h2>
+          <p class="hint">partial match on username, case-insensitive — you won't show up in your own results</p>
+          <div class="search-row">
+            <input id="searchQuery" type="text" placeholder="type a username...">
+            <button onclick="searchUsers()">search</button>
+          </div>
+          <ul class="list" id="searchResults">
+            <li class="empty-row">search to see results</li>
+          </ul>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head-row">
+            <h2>requests waiting on you</h2>
+            <button class="refresh-btn" onclick="loadIncoming()">refresh</button>
+          </div>
+          <p class="hint">people who've sent you a request</p>
+          <ul class="list" id="incomingList">
+            <li class="empty-row">nothing loaded yet — hit refresh</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="panel">
+          <div class="panel-head-row">
+            <h2>your friends</h2>
+            <button class="refresh-btn" onclick="loadFriends()">refresh</button>
+          </div>
+          <p class="hint">works whether you sent the request or they did</p>
+          <ul class="list" id="friendsList">
+            <li class="empty-row">nothing loaded yet — hit refresh</li>
+          </ul>
+        </div>
+
+        <footer class="note">level 2 (sockets + live chat) bolts on here once it's wired up.</footer>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+
+<script>
+let token = localStorage.getItem('chat_token') || null;
+let currentUsername = localStorage.getItem('chat_username') || null;
+
+function tick() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}
+tick();
+setInterval(tick, 1000);
+
+function apiBase() { return document.getElementById('apiBase').value.trim(); }
+
+function switchTab(which) {
+  document.getElementById('tabLogin').classList.toggle('active', which === 'login');
+  document.getElementById('tabSignup').classList.toggle('active', which === 'signup');
+  document.getElementById('formLogin').classList.toggle('active', which === 'login');
+  document.getElementById('formSignup').classList.toggle('active', which === 'signup');
+}
+
+function paintWhoBar() {
+  const box = document.getElementById('whoBox');
+  const name = document.getElementById('whoName');
+  if (token) {
+    name.textContent = currentUsername;
+    box.classList.add('signed-in');
+  } else {
+    name.textContent = 'signed out';
+    box.classList.remove('signed-in');
+  }
+}
+paintWhoBar();
+
+async function api(path, method = 'GET', body = null, auth = false) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth && token) headers['Authorization'] = 'Bearer ' + token;
+  let res, data;
+  try {
+    res = await fetch(apiBase() + path, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : null,
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    return { status: 0, data: { error: 'could not reach the server — is it running?' } };
+  }
+  return { status: res.status, data };
+}
+
+function printOut(elId, status, data) {
+  const el = document.getElementById(elId);
+  el.classList.add('show');
+  el.classList.toggle('err', status >= 400 || status === 0);
+  el.textContent = `${status || 'ERR'} → ` + JSON.stringify(data);
+}
+
+async function signup() {
+  const username = document.getElementById('suUsername').value;
+  const email = document.getElementById('suEmail').value;
+  const password = document.getElementById('suPassword').value;
+  const { status, data } = await api('/api/auth/signup', 'POST', { username, email, password });
+  printOut('suOut', status, data);
+  if (status === 201) switchTab('login');
+}
+
+async function login() {
+  const username = document.getElementById('liUsername').value;
+  const password = document.getElementById('liPassword').value;
+  const { status, data } = await api('/api/auth/login', 'POST', { username, password });
+  printOut('liOut', status, data);
+  if (data.token) {
+    token = data.token;
+    currentUsername = data.user.username;
+    localStorage.setItem('chat_token', token);
+    localStorage.setItem('chat_username', currentUsername);
+    paintWhoBar();
+  }
+}
+
+function logout() {
+  token = null;
+  currentUsername = null;
+  localStorage.removeItem('chat_token');
+  localStorage.removeItem('chat_username');
+  paintWhoBar();
+}
+
+async function searchUsers() {
+  const q = document.getElementById('searchQuery').value;
+  const { data } = await api('/api/users/search?q=' + encodeURIComponent(q), 'GET', null, true);
+  const list = document.getElementById('searchResults');
+  list.innerHTML = '';
+  const users = data.users || [];
+  if (!users.length) {
+    list.innerHTML = '<li class="empty-row">nobody matches that</li>';
+    return;
+  }
+  users.forEach(u => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span><span class="dot ${u.is_online ? 'on' : 'off'}"></span>${u.username}</span>
+      <button class="pill-btn" onclick="sendFriendRequest('${u.username}')">add friend</button>
+    `;
+    list.appendChild(li);
+  });
+}
+
+async function sendFriendRequest(username) {
+  const { status, data } = await api('/api/friends/request', 'POST', { username }, true);
+  alert(`[${status}] ` + JSON.stringify(data));
+}
+
+async function loadIncoming() {
+  const { data } = await api('/api/friends/requests/incoming', 'GET', null, true);
+  const list = document.getElementById('incomingList');
+  list.innerHTML = '';
+  const requests = data.requests || [];
+  if (!requests.length) {
+    list.innerHTML = '<li class="empty-row">nothing pending</li>';
+    return;
+  }
+  requests.forEach(r => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span>${r.username}</span>
+      <span class="btnset">
+        <button class="pill-btn" onclick="respond('${r.friendship_id}', 'accept')">accept</button>
+        <button class="pill-btn reject" onclick="respond('${r.friendship_id}', 'reject')">reject</button>
+      </span>
+    `;
+    list.appendChild(li);
+  });
+}
+
+async function respond(friendshipId, action) {
+  const { status, data } = await api('/api/friends/request/' + friendshipId, 'PATCH', { action }, true);
+  alert(`[${status}] ` + JSON.stringify(data));
+  loadIncoming();
+  loadFriends();
+}
+
+async function loadFriends() {
+  const { data } = await api('/api/friends', 'GET', null, true);
+  const list = document.getElementById('friendsList');
+  list.innerHTML = '';
+  const friends = data.friends || [];
+  if (!friends.length) {
+    list.innerHTML = '<li class="empty-row">no one yet</li>';
+    return;
+  }
+  friends.forEach(f => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span><span class="dot ${f.is_online ? 'on' : 'off'}"></span>${f.username}</span>`;
+    list.appendChild(li);
+  });
+}
+</script>
+
+</body>
+</html>

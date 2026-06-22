@@ -1,16 +1,57 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+
+// --- VALIDATION RULES ---
+// These run as middleware BEFORE the actual signup/login functions.
+// Each .body(...) check either passes silently or adds an error to
+// the request, which we then check with validationResult(req).
+
+const signupValidationRules = [
+  body('username')
+    .trim()
+    .isLength({ min: 3, max: 30 })
+    .withMessage('Username must be 3-30 characters')
+    .matches(/^[a-zA-Z0-9_]+$/)
+    .withMessage('Username can only contain letters, numbers, and underscores'),
+
+  body('email')
+    .trim()
+    .isEmail()
+    .withMessage('Please enter a valid email address')
+    .normalizeEmail(),
+    // normalizeEmail() lowercases it and strips minor formatting
+    // differences, so "Alex@Mail.com" and "alex@mail.com" are
+    // treated as the same address.
+
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+];
+
+const loginValidationRules = [
+  body('username').trim().notEmpty().withMessage('Username is required'),
+  body('password').notEmpty().withMessage('Password is required'),
+];
+
+// Shared helper: checks if any validation rule above failed,
+// and if so, sends back a clean list of what's wrong.
+function handleValidationErrors(req, res, next) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: errors.array().map((e) => e.msg),
+    });
+  }
+  next();
+}
 
 // --- SIGNUP ---
 async function signup(req, res) {
   try {
     const { username, email, password } = req.body;
-
-    // Basic presence check
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: 'username, email, and password are required' });
-    }
 
     // Check if username or email is already taken
     const existingUsername = await User.findByUsername(username);
@@ -24,8 +65,6 @@ async function signup(req, res) {
 
     // Hash the password -- NEVER store the real one
     const passwordHash = await bcrypt.hash(password, 10);
-    // "10" is the salt rounds -- how much computational work goes into
-    // scrambling. Higher = more secure but slower. 10 is a solid default.
 
     const newUser = await User.createUser({ username, email, passwordHash });
 
@@ -44,22 +83,16 @@ async function login(req, res) {
   try {
     const { username, password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'username and password are required' });
-    }
-
     const user = await User.findByUsername(username);
     if (!user) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    // Compare the typed password against the stored hash
     const passwordMatches = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatches) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    // Create the JWT "wristband" token
     const token = jwt.sign(
       { userId: user.id, username: user.username },
       process.env.JWT_SECRET,
@@ -91,4 +124,12 @@ async function getMe(req, res) {
   }
 }
 
-module.exports = { signup, login, getMe };
+module.exports = {
+  signup,
+  login,
+  getMe,
+  signupValidationRules,
+  loginValidationRules,
+  handleValidationErrors,
+};
+

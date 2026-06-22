@@ -1,12 +1,17 @@
 const express = require('express');
 const router = express.Router();
-const { signup, login, getMe } = require('../controllers/authController');
+const {
+  signup,
+  login,
+  getMe,
+  signupValidationRules,
+  loginValidationRules,
+  handleValidationErrors,
+} = require('../controllers/authController');
 const requireAuth = require('../middleware/auth');
 
-router.post('/signup', signup);
-router.post('/login', login);
-
-// requireAuth runs FIRST. Only if it calls next() does getMe ever run.
+router.post('/signup', signupValidationRules, handleValidationErrors, signup);
+router.post('/login', loginValidationRules, handleValidationErrors, login);
 router.get('/me', requireAuth, getMe);
 
 module.exports = router;
