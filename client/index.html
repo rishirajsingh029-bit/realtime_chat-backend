@@ -1,8 +1,7 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>chatdev // local test console</title>
 <style>
   :root {
@@ -35,7 +34,6 @@
     min-height: 100vh;
   }
 
-  /* ---------- sidebar ---------- */
   .sidebar {
     background: var(--panel);
     border-right: 1px solid var(--line);
@@ -159,7 +157,6 @@
   }
   .logout-link:hover { color: var(--accent); }
 
-  /* ---------- main ---------- */
   .main { padding: 28px 36px; }
   .main-head {
     display: flex;
@@ -273,7 +270,6 @@
 
 <div class="app">
 
-  <!-- SIDEBAR: identity + auth -->
   <aside class="sidebar">
     <div class="brand">chatdev <span>//</span></div>
     <div class="brand-note">local test console, not the real frontend</div>
@@ -286,6 +282,7 @@
     <div class="who-box" id="whoBox">
       <div class="who-label">status</div>
       <div class="who-name" id="whoName">signed out</div>
+      <div id="connStatus" style="font-size:11px; margin-top:4px; color:var(--muted);"></div>
     </div>
 
     <div class="auth-block">
@@ -313,10 +310,9 @@
     <button class="logout-link" onclick="logout()">sign out →</button>
   </aside>
 
-  <!-- MAIN: the actual features -->
   <main class="main">
     <div class="main-head">
-      <h1>level 1 — auth, search, friends</h1>
+      <h1>level 1 + 2 — auth, friends, live chat</h1>
       <div class="clock" id="clock"></div>
     </div>
 
@@ -359,7 +355,19 @@
           </ul>
         </div>
 
-        <footer class="note">level 2 (sockets + live chat) bolts on here once it's wired up.</footer>
+        <div class="panel" id="chatPanel" style="display:none;">
+          <div class="panel-head-row">
+            <h2>chat with <span id="chatWithName"></span></h2>
+            <button class="refresh-btn" onclick="closeChat()">close</button>
+          </div>
+          <div id="chatMessages" style="height:260px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px; font-size:13px;"></div>
+          <div class="search-row">
+            <input id="chatInput" type="text" placeholder="type a message...">
+            <button onclick="sendChatMessage()">send</button>
+          </div>
+        </div>
+
+        <footer class="note">level 3 (read receipts + media) bolts on here once it's wired up.</footer>
       </div>
 
     </div>
@@ -367,17 +375,86 @@
 
 </div>
 
+<script src="http://localhost:5000/socket.io/socket.io.js"></script>
 <script>
+// ---- all shared state declared FIRST, before any function uses it ----
 let token = localStorage.getItem('chat_token') || null;
 let currentUsername = localStorage.getItem('chat_username') || null;
+let socket = null;
+let activeChatUserId = null;
+let activeChatUsername = null;
+
+function apiBase() { return document.getElementById('apiBase').value.trim(); }
+
+function paintConnStatus(state) {
+  const el = document.getElementById('connStatus');
+  if (!el) return;
+  const map = {
+    connected: ['🟢 live', 'var(--ok)'],
+    disconnected: ['🔴 connection lost — retrying...', 'var(--accent)'],
+    reconnecting: ['🟡 reconnecting...', 'var(--accent)'],
+    error: ['🔴 could not connect', 'var(--accent)'],
+  };
+  const [text, color] = map[state] || ['', 'var(--muted)'];
+  el.textContent = text;
+  el.style.color = color;
+}
+
+function connectSocket() {
+  if (!token) return;
+  if (socket) socket.disconnect();
+
+  socket = io(apiBase(), {
+    auth: { token: token },
+  });
+
+  socket.on('connect', () => {
+    console.log('socket connected:', socket.id);
+    paintConnStatus('connected');
+  });
+
+  socket.on('connect_error', (err) => {
+    console.log('socket connection failed:', err.message);
+    paintConnStatus('error');
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('socket disconnected:', reason);
+    paintConnStatus('disconnected');
+  });
+
+  socket.io.on('reconnect_attempt', (attempt) => {
+    console.log('attempting to reconnect... try #' + attempt);
+    paintConnStatus('reconnecting');
+  });
+
+  socket.io.on('reconnect', () => {
+    console.log('reconnected successfully');
+    paintConnStatus('connected');
+  });
+
+  socket.on('message_sent', (msg) => {
+    if (msg.receiver_id === activeChatUserId) renderMessage(msg);
+  });
+
+  socket.on('new_message', (msg) => {
+    if (msg.sender_id === activeChatUserId) {
+      renderMessage(msg);
+    } else {
+      console.log('new message from someone else:', msg);
+    }
+  });
+
+  socket.on('friend_status_changed', () => {
+    loadFriends(); // cheap way to refresh online/offline dots
+  });
+}
 
 function tick() {
   document.getElementById('clock').textContent = new Date().toLocaleTimeString();
 }
 tick();
 setInterval(tick, 1000);
-
-function apiBase() { return document.getElementById('apiBase').value.trim(); }
 
 function switchTab(which) {
   document.getElementById('tabLogin').classList.toggle('active', which === 'login');
@@ -443,6 +520,7 @@ async function login() {
     localStorage.setItem('chat_token', token);
     localStorage.setItem('chat_username', currentUsername);
     paintWhoBar();
+    connectSocket();
   }
 }
 
@@ -451,6 +529,8 @@ function logout() {
   currentUsername = null;
   localStorage.removeItem('chat_token');
   localStorage.removeItem('chat_username');
+  if (socket) socket.disconnect();
+  closeChat();
   paintWhoBar();
 }
 
@@ -519,10 +599,55 @@ async function loadFriends() {
   }
   friends.forEach(f => {
     const li = document.createElement('li');
-    li.innerHTML = `<span><span class="dot ${f.is_online ? 'on' : 'off'}"></span>${f.username}</span>`;
+    li.innerHTML = `
+      <span><span class="dot ${f.is_online ? 'on' : 'off'}"></span>${f.username}</span>
+      <button class="pill-btn" onclick="openChat('${f.id}', '${f.username}')">chat</button>
+    `;
     list.appendChild(li);
   });
 }
+
+async function openChat(userId, username) {
+  activeChatUserId = userId;
+  activeChatUsername = username;
+  document.getElementById('chatWithName').textContent = username;
+  document.getElementById('chatPanel').style.display = 'block';
+
+  const { data } = await api('/api/messages/' + userId, 'GET', null, true);
+  const box = document.getElementById('chatMessages');
+  box.innerHTML = '';
+  (data.messages || []).forEach(renderMessage);
+  box.scrollTop = box.scrollHeight;
+}
+
+function closeChat() {
+  activeChatUserId = null;
+  activeChatUsername = null;
+  document.getElementById('chatPanel').style.display = 'none';
+}
+
+function renderMessage(msg) {
+  const box = document.getElementById('chatMessages');
+  const mine = msg.sender_id !== activeChatUserId;
+  const div = document.createElement('div');
+  div.style.textAlign = mine ? 'right' : 'left';
+  div.style.margin = '6px 0';
+  div.innerHTML = `<span style="background:${mine ? 'var(--accent-soft)' : 'var(--bg)'}; padding:5px 10px; border-radius:10px; display:inline-block; max-width:75%;">${msg.content}</span>`;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function sendChatMessage() {
+  const input = document.getElementById('chatInput');
+  const content = input.value.trim();
+  if (!content || !activeChatUserId || !socket) return;
+
+  socket.emit('send_message', { receiverId: activeChatUserId, content });
+  input.value = '';
+}
+
+// ---- run on initial page load, AFTER everything above is defined ----
+if (token) connectSocket();
 </script>
 
 </body>

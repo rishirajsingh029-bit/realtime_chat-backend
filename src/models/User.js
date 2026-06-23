@@ -52,10 +52,21 @@ async function searchByUsername(query, excludeUserId) {
   return result.rows;
 }
 
+// Mark a user online or offline, and stamp the time it happened
+async function setOnlineStatus(userId, isOnline) {
+  await pool.query(
+    `UPDATE users
+     SET is_online = $1, last_seen_at = NOW()
+     WHERE id = $2`,
+    [isOnline, userId]
+  );
+}
+
 module.exports = {
   createUser,
   findByUsername,
   findByEmail,
   findById,
+  setOnlineStatus,
   searchByUsername,
 };
