@@ -38,5 +38,27 @@ async function getConversation(userIdA, userIdB, limit = 50, beforeTimestamp = n
 
   return result.rows.reverse(); // reverse so the frontend gets oldest-first
 }
+// Mark a single message as delivered (receiver's socket got it)
+async function markDelivered(messageId) {
+  const result = await pool.query(
+    `UPDATE messages SET status = 'delivered'
+     WHERE id = $1 AND status = 'sent'
+     RETURNING *`,
+    [messageId]
+  );
+  return result.rows[0];
+}
 
-module.exports = { createMessage, getConversation };
+// Mark ALL messages from one sender to a receiver as read at once
+// (this is what happens when the receiver opens the chat window)
+async function markConversationRead(senderId, receiverId) {
+  const result = await pool.query(
+    `UPDATE messages
+     SET status = 'read'
+     WHERE sender_id = $1 AND receiver_id = $2 AND status != 'read'
+     RETURNING id`,
+    [senderId, receiverId]
+  );
+  return result.rows; // list of message ids that just got marked read
+}
+module.exports = { createMessage, getConversation, markDelivered, markConversationRead };

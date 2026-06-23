@@ -448,6 +448,17 @@ function connectSocket() {
   socket.on('friend_status_changed', () => {
     loadFriends(); // cheap way to refresh online/offline dots
   });
+
+  socket.on('messages_read', ({ messageIds }) => {
+    // our own messages just got marked read by the other person -- update ticks
+    messageIds.forEach((id) => {
+      const el = document.querySelector(`[data-msg-id="${id}"] .tick`);
+      if (el) {
+        el.textContent = '✓✓';
+        el.style.color = '#3b82f6';
+      }
+    });
+  });
 }
 
 function tick() {
@@ -618,6 +629,10 @@ async function openChat(userId, username) {
   box.innerHTML = '';
   (data.messages || []).forEach(renderMessage);
   box.scrollTop = box.scrollHeight;
+
+  // tell the server we've now SEEN this conversation -- marks their
+  // messages to us as 'read' and notifies them so their ticks update
+  if (socket) socket.emit('mark_read', { otherUserId: userId });
 }
 
 function closeChat() {
@@ -626,13 +641,26 @@ function closeChat() {
   document.getElementById('chatPanel').style.display = 'none';
 }
 
+// tick mark for OUR OWN sent messages: ✓ sent, ✓✓ grey delivered, ✓✓ blue read
+function tickFor(status) {
+  if (status === 'read') return { text: '✓✓', color: '#3b82f6' };
+  if (status === 'delivered') return { text: '✓✓', color: 'var(--muted)' };
+  return { text: '✓', color: 'var(--muted)' };
+}
+
 function renderMessage(msg) {
   const box = document.getElementById('chatMessages');
   const mine = msg.sender_id !== activeChatUserId;
   const div = document.createElement('div');
+  div.setAttribute('data-msg-id', msg.id);
   div.style.textAlign = mine ? 'right' : 'left';
   div.style.margin = '6px 0';
-  div.innerHTML = `<span style="background:${mine ? 'var(--accent-soft)' : 'var(--bg)'}; padding:5px 10px; border-radius:10px; display:inline-block; max-width:75%;">${msg.content}</span>`;
+
+  const tickHtml = mine
+    ? (() => { const t = tickFor(msg.status); return ` <span class="tick" style="font-size:11px; color:${t.color};">${t.text}</span>`; })()
+    : '';
+
+  div.innerHTML = `<span style="background:${mine ? 'var(--accent-soft)' : 'var(--bg)'}; padding:5px 10px; border-radius:10px; display:inline-block; max-width:75%;">${msg.content}${tickHtml}</span>`;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
