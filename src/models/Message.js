@@ -1,21 +1,20 @@
 const pool = require('../config/db');
 
 // Save a new message
-async function createMessage({ senderId, receiverId, content }) {
+async function createMessage({ senderId, receiverId, content, mediaUrl = null, mediaType = null }) {
   const result = await pool.query(
-    `INSERT INTO messages (sender_id, receiver_id, content)
-     VALUES ($1, $2, $3)
+    `INSERT INTO messages (sender_id, receiver_id, content, media_url, media_type)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [senderId, receiverId, content]
+    [senderId, receiverId, content, mediaUrl, mediaType]
   );
   return result.rows[0];
 }
-
 // Get the conversation history between two users, oldest first,
 // with pagination (so we don't load the entire history every time --
 // this is also part of Level 3's "performance" requirement, but the
 // table/index already supports it).
-async function getConversation(userIdA, userIdB, limit = 50, beforeTimestamp = null) {
+async function getConversation(userIdA, userIdB, limit = 3, beforeTimestamp = null) { // TEMP: testing pagination {
   const params = [userIdA, userIdB];
   let timestampFilter = '';
 

@@ -15,14 +15,13 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const friendRoutes = require('./routes/friendRoutes');
 const messageRoutes = require('./routes/messageRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
+const { generalLimiter, authLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
-const { generalLimiter, authLimiter } = require('./middleware/rateLimiter');
 
 app.use(cors()); // allows our separate frontend file to call this API
 app.use(express.json()); // lets us read JSON sent in request bodies
-app.use(generalLimiter); // apply general rate limiting to all routes
-app.use('/api/auth', authLimiter); // apply stricter rate limiting to auth routes
 
 // If express.json() fails to parse malformed JSON, this catches that
 // error so the server responds with a clean 400 instead of crashing.
@@ -33,11 +32,20 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
+app.use(generalLimiter); // applies to every route mounted below this line
+
 // --- Mount all our REST routes under their respective base paths ---
-app.use('/api/auth', authRoutes);
+// authLimiter is stacked in FRONT of authRoutes -- stricter limit just
+// for login/signup, on top of the general limiter above.
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/upload', uploadRoutes);
+
+// Serve uploaded files directly -- visiting /uploads/whatever.jpg
+// returns that actual file from the uploads/ folder on disk.
+app.use('/uploads', express.static('uploads'));
 
 app.get('/', (req, res) => {
   res.send('Chat app backend is running!');
@@ -57,11 +65,6 @@ const io = new Server(httpServer, {
 });
 
 // --- SOCKET AUTH MIDDLEWARE ---
-// Runs once, before a connection is accepted. The frontend sends its
-// JWT (from login) as part of the connection handshake. We verify it
-// here, exactly like our Express requireAuth middleware does for
-// normal HTTP routes -- same JWT, same secret, just a different
-// transport layer.
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
 
@@ -73,29 +76,21 @@ io.use((socket, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     socket.userId = decoded.userId;
     socket.username = decoded.username;
-    next(); // token valid -- allow the connection
+    next();
   } catch (err) {
-    next(new Error('Invalid or expired token')); // rejects the connection
+    next(new Error('Invalid or expired token'));
   }
 });
 
 // --- In-memory map: userId -> socket.id ---
-// This lets us find "which socket belongs to this user" so we can
-// push messages/events directly to them. This map lives only in this
-// one server process's memory. At scale, with multiple server
-// instances behind a load balancer, you'd replace this with Socket.io's
-// Redis adapter, so all instances share presence/routing info via
-// Redis pub/sub instead of separate local memory.
 const onlineUsers = new Map();
 
 io.on('connection', async (socket) => {
   console.log(`${socket.username} connected (${socket.id})`);
 
-  // Track this user as online, both in memory and in the database
   onlineUsers.set(socket.userId, socket.id);
   await User.setOnlineStatus(socket.userId, true);
 
-  // Tell this user's already-online friends that they just came online
   const friendsOnConnect = await Friendship.listFriends(socket.userId);
   friendsOnConnect.forEach((friend) => {
     const friendSocketId = onlineUsers.get(friend.id);
@@ -109,33 +104,34 @@ io.on('connection', async (socket) => {
   });
 
   // --- SEND A MESSAGE ---
-  socket.on('send_message', async ({ receiverId, content }) => {
+  socket.on('send_message', async ({ receiverId, content, mediaUrl, mediaType }) => {
     try {
-      if (!receiverId || !content || !content.trim()) {
-        return socket.emit('message_error', { error: 'receiverId and content are required' });
+      const hasText = content && content.trim().length > 0;
+      const hasMedia = !!mediaUrl;
+
+      if (!receiverId || (!hasText && !hasMedia)) {
+        return socket.emit('message_error', { error: 'A message needs receiverId and either content or media' });
       }
 
-      // Always save to the database FIRST. This is our source of
-      // truth and guarantees persistence even if the receiver is
-      // offline right now -- they'll see it next time they fetch
-      // history or come online.
+      if (hasText && content.trim().length > 2000) {
+        return socket.emit('message_error', { error: 'Message is too long (max 2000 characters)' });
+      }
+
       const message = await Message.createMessage({
         senderId: socket.userId,
         receiverId,
-        content: content.trim(),
+        content: hasText ? content.trim() : null,
+        mediaUrl: mediaUrl || null,
+        mediaType: mediaType || null,
       });
 
       const receiverSocketId = onlineUsers.get(receiverId);
 
       if (receiverSocketId) {
-        // Receiver is online RIGHT NOW -- we can mark this delivered
-        // immediately, since it's reaching their socket this instant.
         const delivered = await Message.markDelivered(message.id);
         io.to(receiverSocketId).emit('new_message', delivered);
-        socket.emit('message_sent', delivered); // let sender see it's delivered
+        socket.emit('message_sent', delivered);
       } else {
-        // Receiver is offline -- message stays 'sent' in the DB until
-        // they come online AND open this specific chat (see mark_read below).
         socket.emit('message_sent', message);
       }
     } catch (err) {
@@ -145,19 +141,11 @@ io.on('connection', async (socket) => {
   });
 
   // --- MARK A CONVERSATION AS READ ---
-  // The frontend fires this the moment the user opens/views a chat
-  // with a specific friend. We mark every unread message FROM that
-  // friend TO us as 'read', all at once (mirrors how WhatsApp/Messenger
-  // mark an entire opened thread as read together, not message-by-message).
   socket.on('mark_read', async ({ otherUserId }) => {
     try {
-      // otherUserId = the person who SENT the messages
-      // socket.userId = the person READING them right now (us)
       const readMessages = await Message.markConversationRead(otherUserId, socket.userId);
 
       if (readMessages.length > 0) {
-        // Notify the original sender (if they're online) that their
-        // messages were just read, so their UI can show read receipts.
         const senderSocketId = onlineUsers.get(otherUserId);
         if (senderSocketId) {
           io.to(senderSocketId).emit('messages_read', {
@@ -188,7 +176,6 @@ io.on('connection', async (socket) => {
     onlineUsers.delete(socket.userId);
     await User.setOnlineStatus(socket.userId, false);
 
-    // Tell this user's friends they just went offline
     const friendsOnDisconnect = await Friendship.listFriends(socket.userId);
     friendsOnDisconnect.forEach((friend) => {
       const friendSocketId = onlineUsers.get(friend.id);

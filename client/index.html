@@ -361,8 +361,11 @@
             <button class="refresh-btn" onclick="closeChat()">close</button>
           </div>
           <div id="chatMessages" style="height:260px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px; font-size:13px;"></div>
+          <div id="filePreview" style="font-size:11.5px; color:var(--muted); margin-bottom:6px; display:none;"></div>
           <div class="search-row">
             <input id="chatInput" type="text" placeholder="type a message...">
+            <input id="fileInput" type="file" style="display:none;" onchange="handleFileSelected()">
+            <button class="refresh-btn" onclick="document.getElementById('fileInput').click()">📎</button>
             <button onclick="sendChatMessage()">send</button>
           </div>
         </div>
@@ -630,15 +633,61 @@ async function openChat(userId, username) {
   (data.messages || []).forEach(renderMessage);
   box.scrollTop = box.scrollHeight;
 
-  // tell the server we've now SEEN this conversation -- marks their
-  // messages to us as 'read' and notifies them so their ticks update
+  // if we got back a full page (50), there's likely more history to load
+  showOlderButton((data.messages || []).length === 50);
+
   if (socket) socket.emit('mark_read', { otherUserId: userId });
+}
+
+function showOlderButton(visible) {
+  let btn = document.getElementById('loadOlderBtn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'loadOlderBtn';
+    btn.className = 'refresh-btn';
+    btn.textContent = '↑ load older messages';
+    btn.style.cssText = 'width:100%; margin-bottom:8px; font-size:11.5px;';
+    btn.onclick = loadOlderMessages;
+    document.getElementById('chatMessages').insertAdjacentElement('beforebegin', btn);
+  }
+  btn.style.display = visible ? 'block' : 'none';
+}
+
+// Pagination: ask the server for messages OLDER than the oldest one
+// currently shown. This is the "beforeTimestamp" cursor our backend
+// already supports -- each page is max 50 messages, so a 10,000-message
+// history never gets loaded all at once.
+async function loadOlderMessages() {
+  const box = document.getElementById('chatMessages');
+  const firstMsgEl = box.querySelector('[data-msg-id]');
+  if (!firstMsgEl) return;
+
+  const oldestVisibleId = firstMsgEl.getAttribute('data-msg-id');
+  const oldestVisibleTimestamp = firstMsgEl.getAttribute('data-created-at');
+  if (!oldestVisibleTimestamp) return;
+
+  const { data } = await api(
+    `/api/messages/${activeChatUserId}?before=${encodeURIComponent(oldestVisibleTimestamp)}`,
+    'GET', null, true
+  );
+  const older = data.messages || [];
+
+  const previousScrollHeight = box.scrollHeight;
+  older.reverse().forEach((msg) => {
+    const el = renderMessage(msg, true); // prepend = true
+  });
+  // keep the scroll position steady instead of jumping to the top
+  box.scrollTop = box.scrollHeight - previousScrollHeight;
+
+  showOlderButton(older.length === 50);
 }
 
 function closeChat() {
   activeChatUserId = null;
   activeChatUsername = null;
   document.getElementById('chatPanel').style.display = 'none';
+  const btn = document.getElementById('loadOlderBtn');
+  if (btn) btn.remove();
 }
 
 // tick mark for OUR OWN sent messages: ✓ sent, ✓✓ grey delivered, ✓✓ blue read
@@ -648,11 +697,12 @@ function tickFor(status) {
   return { text: '✓', color: 'var(--muted)' };
 }
 
-function renderMessage(msg) {
+function renderMessage(msg, prepend = false) {
   const box = document.getElementById('chatMessages');
   const mine = msg.sender_id !== activeChatUserId;
   const div = document.createElement('div');
   div.setAttribute('data-msg-id', msg.id);
+  div.setAttribute('data-created-at', msg.created_at);
   div.style.textAlign = mine ? 'right' : 'left';
   div.style.margin = '6px 0';
 
@@ -660,18 +710,84 @@ function renderMessage(msg) {
     ? (() => { const t = tickFor(msg.status); return ` <span class="tick" style="font-size:11px; color:${t.color};">${t.text}</span>`; })()
     : '';
 
-  div.innerHTML = `<span style="background:${mine ? 'var(--accent-soft)' : 'var(--bg)'}; padding:5px 10px; border-radius:10px; display:inline-block; max-width:75%;">${msg.content}${tickHtml}</span>`;
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
+  // media first (if any), then text caption (if any)
+  let mediaHtml = '';
+  if (msg.media_url) {
+    const fullUrl = apiBase() + msg.media_url;
+    if (msg.media_type === 'image') {
+      mediaHtml = `<a href="${fullUrl}" target="_blank"><img src="${fullUrl}" style="max-width:200px; border-radius:8px; display:block; margin-bottom:4px;"></a>`;
+    } else {
+      mediaHtml = `<a href="${fullUrl}" target="_blank" style="display:block; margin-bottom:4px;">📄 ${msg.media_url.split('/').pop()}</a>`;
+    }
+  }
+
+  const textHtml = msg.content ? msg.content : '';
+
+  div.innerHTML = `<span style="background:${mine ? 'var(--accent-soft)' : 'var(--bg)'}; padding:6px 10px; border-radius:10px; display:inline-block; max-width:75%;">${mediaHtml}${textHtml}${tickHtml}</span>`;
+
+  if (prepend) {
+    box.insertBefore(div, box.firstChild);
+  } else {
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+let pendingFile = null; // holds the file the user picked, before sending
+
+function handleFileSelected() {
+  const fileInput = document.getElementById('fileInput');
+  pendingFile = fileInput.files[0] || null;
+  const preview = document.getElementById('filePreview');
+  if (pendingFile) {
+    preview.textContent = '📎 ' + pendingFile.name + ' (ready to send)';
+    preview.style.display = 'block';
+  } else {
+    preview.style.display = 'none';
+  }
+}
+
+async function uploadPendingFile() {
+  const formData = new FormData();
+  formData.append('file', pendingFile);
+
+  const res = await fetch(apiBase() + '/api/upload', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token }, // NOTE: no Content-Type here --
+    // the browser sets the correct multipart boundary header automatically
+    // when the body is a FormData object. Setting it manually breaks uploads.
+    body: formData,
+  });
+  return res.json();
 }
 
 function sendChatMessage() {
   const input = document.getElementById('chatInput');
   const content = input.value.trim();
-  if (!content || !activeChatUserId || !socket) return;
+  if (!activeChatUserId || !socket) return;
 
-  socket.emit('send_message', { receiverId: activeChatUserId, content });
-  input.value = '';
+  if (pendingFile) {
+    uploadPendingFile().then((result) => {
+      if (result.mediaUrl) {
+        socket.emit('send_message', {
+          receiverId: activeChatUserId,
+          content: content || null,
+          mediaUrl: result.mediaUrl,
+          mediaType: result.mediaType,
+        });
+      } else {
+        alert('Upload failed: ' + JSON.stringify(result));
+      }
+      pendingFile = null;
+      document.getElementById('fileInput').value = '';
+      document.getElementById('filePreview').style.display = 'none';
+      input.value = '';
+    });
+  } else {
+    if (!content) return;
+    socket.emit('send_message', { receiverId: activeChatUserId, content });
+    input.value = '';
+  }
 }
 
 // ---- run on initial page load, AFTER everything above is defined ----

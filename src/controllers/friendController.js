@@ -5,10 +5,13 @@ const User = require('../models/User');
 async function sendFriendRequest(req, res) {
   try {
     const requesterId = req.user.id;
-    const { username } = req.body; // who they want to friend
+    const { username } = req.body;
 
-    if (!username) {
+    if (!username || typeof username !== 'string' || username.trim().length === 0) {
       return res.status(400).json({ error: 'username is required' });
+    }
+    if (username.length > 30) {
+      return res.status(400).json({ error: 'username is too long' });
     }
 
     const addressee = await User.findByUsername(username);
@@ -35,9 +38,9 @@ async function sendFriendRequest(req, res) {
 // --- ACCEPT OR REJECT A REQUEST ---
 async function respondToFriendRequest(req, res) {
   try {
-    const addresseeId = req.user.id; // only the receiver can respond
+    const addresseeId = req.user.id;
     const { friendshipId } = req.params;
-    const { action } = req.body; // "accept" or "reject"
+    const { action } = req.body;
 
     if (!['accept', 'reject'].includes(action)) {
       return res.status(400).json({ error: 'action must be "accept" or "reject"' });
